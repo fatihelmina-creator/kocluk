@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Öğrenci Koçluk & Takip Sistemi</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Firebase App & Firestore Modular Libraries -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Config Setup
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-api-key",
+            authDomain: "demo-app.firebaseapp.com",
+            projectId: "demo-app",
+            storageBucket: "demo-app.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'kocluk-takip-app';
+
+        window.db = db;
+        window.auth = auth;
+        window.appId = appId;
+        window.firestoreDoc = doc;
+        window.firestoreSetDoc = setDoc;
+        window.firestoreCollection = collection;
+        window.firestoreOnSnapshot = onSnapshot;
+        window.firestoreDeleteDoc = deleteDoc;
+
+        // Firebase Auth Initialization
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Auth Hata:", err);
+            }
+        }
+
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                window.currentUser = user;
+                if (window.onFirebaseReady) window.onFirebaseReady();
+            }
+        });
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #141218;
+            color: #E6E1E5;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1C1B1F;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #49454F;
+            border-radius: 4px;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="bg-[#141218] min-h-screen text-[#E6E1E5] flex flex-col custom-scrollbar select-none">
+
+    <!-- Toast Notification Box -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Top Navigation Header -->
+    <header class="bg-[#1C1B1F] border-b border-[#49454F] sticky top-0 z-40 px-4 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#6750A4] to-[#D0BCFF] flex items-center justify-center text-white shadow-md">
+                <i data-lucide="graduation-cap" class="w-6 h-6 text-[#381E72]"></i>
+            </div>
+            <div>
+                <h1 class="text-base sm:text-lg font-extrabold text-white tracking-tight leading-none">Öğrenci Koçluk & Takip</h1>
+                <p class="text-[11px] text-[#938F99] mt-0.5 font-medium">YKS • LGS • KPSS Bulut Tabanlı Başarı Rehberi</p>
+            </div>
+        </div>
+
+        <!-- Role Selector & Active Student Controls -->
+        <div class="flex items-center space-x-2 sm:space-x-3">
+            <!-- Role Toggle Button -->
+            <div class="bg-[#25232A] p-1 rounded-2xl border border-[#49454F] flex items-center">
+                <button id="roleBtnCoach" onclick="setUserRole('coach')" class="px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 bg-[#D0BCFF] text-[#381E72]">
+                    <i data-lucide="user-check" class="w-3.5 h-3.5"></i>
+                    <span>Öğretmen / Koç</span>
+                </button>
+                <button id="roleBtnStudent" onclick="setUserRole('student')" class="px-3 py-1.5 rounded-xl text-xs font-semibold text-[#938F99] hover:text-white transition flex items-center space-x-1.5">
+                    <i data-lucide="user" class="w-3.5 h-3.5"></i>
+                    <span>Öğrenci Modu</span>
+                </button>
+            </div>
+
+            <!-- Active Student Dropdown (Only Visible in Coach Mode) -->
+            <div id="studentSelectWrapper" class="relative">
+                <select id="studentSelect" onchange="switchStudent(this.value)" class="bg-[#25232A] border border-[#49454F] text-[#D0BCFF] text-xs font-bold rounded-xl px-3 py-2 pr-8 focus:outline-none focus:border-[#D0BCFF] cursor-pointer appearance-none shadow-sm">
+                    <!-- Populated via JS -->
+                </select>
+                <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-[#D0BCFF] absolute right-2.5 top-2.5 pointer-events-none"></i>
+            </div>
+
+            <!-- Add Student Button (Coach Only) -->
+            <button id="addStudentHeaderBtn" onclick="openModal('addStudentModal')" class="bg-[#4A4458] hover:bg-[#6750A4] text-[#D0BCFF] hover:text-white px-3 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow">
+                <i data-lucide="user-plus" class="w-4 h-4"></i>
+                <span class="hidden md:inline">Öğrenci Ekle</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs Bar -->
+    <nav class="bg-[#1C1B1F] px-4 lg:px-8 border-b border-[#3B383E] flex space-x-1 overflow-x-auto custom-scrollbar">
+        <button onclick="switchTab('dashboard')" id="tabBtn-dashboard" class="tab-btn active px-4 py-3 text-sm font-bold border-b-2 border-[#D0BCFF] text-[#D0BCFF] flex items-center space-x-2 transition whitespace-nowrap">
+            <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+            <span>Genel Bakış</span>
+        </button>
+        <button onclick="switchTab('schedule')" id="tabBtn-schedule" class="tab-btn px-4 py-3 text-sm font-semibold border-b-2 border-transparent text-[#938F99] hover:text-[#E6E1E5] flex items-center space-x-2 transition whitespace-nowrap">
+            <i data-lucide="calendar-days" class="w-4 h-4"></i>
+            <span>Haftalık Ders Planı</span>
+        </button>
+        <button onclick="switchTab('exams')" id="tabBtn-exams" class="tab-btn px-4 py-3 text-sm font-semibold border-b-2 border-transparent text-[#938F99] hover:text-[#E6E1E5] flex items-center space-x-2 transition whitespace-nowrap">
+            <i data-lucide="trending-up" class="w-4 h-4"></i>
+            <span>Deneme Sınavı Takibi</span>
+        </button>
+        <button onclick="switchTab('aiCoach')" id="tabBtn-aiCoach" class="tab-btn px-4 py-3 text-sm font-semibold border-b-2 border-transparent text-[#938F99] hover:text-[#E6E1E5] flex items-center space-x-2 transition whitespace-nowrap">
+            <i data-lucide="bot" class="w-4 h-4 text-[#D0BCFF]"></i>
+            <span>Gemini AI Koç</span>
+        </button>
+        <button onclick="switchTab('pomodoro')" id="tabBtn-pomodoro" class="tab-btn px-4 py-3 text-sm font-semibold border-b-2 border-transparent text-[#938F99] hover:text-[#E6E1E5] flex items-center space-x-2 transition whitespace-nowrap">
+            <i data-lucide="timer" class="w-4 h-4"></i>
+            <span>Pomodoro Sayacı</span>
+        </button>
+    </nav>
+
+    <!-- Main App Body -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8 space-y-6">
+
+        <!-- Active Student Info Header Bar -->
+        <section id="studentHeaderCard" class="bg-gradient-to-r from-[#25232A] to-[#1C1B1F] border border-[#49454F] rounded-3xl p-5 lg:p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <!-- Populated via JS -->
+        </section>
+
+        <!-- TAB 1: DASHBOARD (Genel Bakış) -->
+        <section id="tabContent-dashboard" class="tab-content space-y-6">
+            <!-- 4 Quick KPI Cards -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-[#25232A] border border-[#49454F] rounded-2xl p-4 shadow">
+                    <p class="text-xs text-[#938F99] font-medium">Haftalık Tamamlanma</p>
+                    <h3 id="kpiCompletionRate" class="text-2xl font-black text-white mt-1">-%</h3>
+                    <p id="kpiCompletionSub" class="text-xs text-[#81C784] mt-1 font-semibold">0 / 0 Görev</p>
+                </div>
+                <div class="bg-[#25232A] border border-[#49454F] rounded-2xl p-4 shadow">
+                    <p class="text-xs text-[#938F99] font-medium">Planlanan Çalışma</p>
+                    <h3 id="kpiTotalHours" class="text-2xl font-black text-[#D0BCFF] mt-1">0 Saat</h3>
+                    <p id="kpiTotalMinutes" class="text-xs text-[#938F99] mt-1 font-medium">0 Dakika toplam</p>
+                </div>
+                <div class="bg-[#25232A] border border-[#49454F] rounded-2xl p-4 shadow">
+                    <p class="text-xs text-[#938F99] font-medium">Haftalık Hedef Soru</p>
+                    <h3 id="kpiTotalQuestions" class="text-2xl font-black text-[#FFD54F] mt-1">0</h3>
+                    <p class="text-xs text-[#938F99] mt-1 font-medium">Toplam Soru Hedefi</p>
+                </div>
+                <div class="bg-[#25232A] border border-[#49454F] rounded-2xl p-4 shadow">
+                    <p class="text-xs text-[#938F99] font-medium">Son Deneme Neti</p>
+                    <h3 id="kpiLatestNet" class="text-2xl font-black text-[#81C784] mt-1">-</h3>
+                    <p id="kpiTargetDistance" class="text-xs text-[#D0BCFF] mt-1 font-semibold">Hedef: - Net</p>
+                </div>
+            </div>
+
+            <!-- Main Dashboard Row: Today's Tasks & Coach Box -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Today's Schedule -->
+                <div class="lg:col-span-2 bg-[#25232A] border border-[#49454F] rounded-3xl p-6 shadow-xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-2">
+                            <i data-lucide="check-circle-2" class="w-5 h-5 text-[#D0BCFF]"></i>
+                            <h2 class="text-lg font-bold text-white">Bugünün Ders & Görevleri</h2>
+                        </div>
+                        <span id="todayBadge" class="bg-[#4A4458] text-[#D0BCFF] text-xs font-bold px-3 py-1 rounded-full">Pazartesi</span>
+                    </div>
+
+                    <div id="todayTaskList" class="space-y-3">
+                        <!-- Dynamic via JS -->
+                    </div>
+                </div>
+
+                <!-- Coach Notes & Quick Actions -->
+                <div class="space-y-6">
+                    <div class="bg-[#25232A] border border-[#49454F] rounded-3xl p-6 shadow-xl space-y-4">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-2">
+                                <i data-lucide="sparkles" class="w-5 h-5 text-[#D0BCFF]"></i>
+                                <h3 class="text-base font-bold text-white">Koç Değerlendirmesi</h3>
+                            </div>
+                            <button onclick="switchTab('aiCoach')" class="text-xs text-[#D0BCFF] hover:underline font-semibold">Detaylı Analiz →</button>
+                        </div>
+                        <div id="coachInsightBox" class="bg-[#1C1B1F] border border-[#3B383E] rounded-2xl p-4 text-xs text-[#E8DEF8] leading-relaxed min-h-[100px]">
+                            Öğrencinin haftalık çalışma dengesi ve deneme sınavları analiz ediliyor...
+                        </div>
+
+                        <!-- Coach Action Button -->
+                        <div id="coachActionBox" class="pt-2 space-y-2">
+                            <button onclick="openModal('addWeeklyCourseModal')" class="w-full bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center space-x-2 shadow">
+                                <i data-lucide="plus" class="w-4 h-4"></i>
+                                <span>Ders Programına Ekle</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: SCHEDULE (Haftalık Ders Planlayıcı) -->
+        <section id="tabContent-schedule" class="tab-content hidden space-y-6">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-xl font-black text-white">Haftalık Ders Programı</h2>
+                    <p class="text-xs text-[#938F99]">7 günlük ders dağılımı, çalışma saatleri ve hedefler</p>
+                </div>
+                <div id="scheduleActionButtons" class="flex items-center space-x-2">
+                    <button onclick="openModal('templateModal')" class="bg-[#4A4458] hover:bg-[#6750A4] text-[#D0BCFF] hover:text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow">
+                        <i data-lucide="wand-2" class="w-4 h-4"></i>
+                        <span>Hazır Şablon Yükle</span>
+                    </button>
+                    <button onclick="openModal('addWeeklyCourseModal')" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                        <span>Ders & Saat Ekle</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 7-Day Matrix Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" id="weeklyMatrixContainer">
+                <!-- Populated via JS -->
+            </div>
+        </section>
+
+        <!-- TAB 3: EXAMS (Deneme Sınavı Takibi) -->
+        <section id="tabContent-exams" class="tab-content hidden space-y-6">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-xl font-black text-white">Deneme Sınavı Takip Paneli</h2>
+                    <p class="text-xs text-[#938F99]">Net skorları, zaman içindeki gelişim grafiği ve branş analizleri</p>
+                </div>
+                <button onclick="openModal('addExamModal')" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center space-x-2 shadow">
+                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    <span>Yeni Deneme Sınavı Kaydet</span>
+                </button>
+            </div>
+
+            <!-- Interactive Chart Card -->
+            <div class="bg-[#25232A] border border-[#49454F] rounded-3xl p-6 shadow-xl space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                        <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                            <i data-lucide="activity" class="w-5 h-5 text-[#D0BCFF]"></i>
+                            <span>Zaman İçindeki Gelişim Grafiği</span>
+                        </h3>
+                        <p class="text-xs text-[#938F99]">Kronolojik net artışı ve branş kırılımları</p>
+                    </div>
+
+                    <!-- Chart Branch Filter Buttons -->
+                    <div class="flex flex-wrap items-center gap-1 bg-[#1C1B1F] p-1 rounded-xl border border-[#49454F]" id="chartSubjectFilters">
+                        <button onclick="updateChartSubject('Toplam')" class="chart-subj-btn active px-2.5 py-1 text-xs font-bold rounded-lg bg-[#D0BCFF] text-[#381E72]">Toplam</button>
+                        <button onclick="updateChartSubject('Matematik')" class="chart-subj-btn px-2.5 py-1 text-xs font-semibold rounded-lg text-[#938F99] hover:text-white">Matematik</button>
+                        <button onclick="updateChartSubject('Türkçe')" class="chart-subj-btn px-2.5 py-1 text-xs font-semibold rounded-lg text-[#938F99] hover:text-white">Türkçe</button>
+                        <button onclick="updateChartSubject('Fen')" class="chart-subj-btn px-2.5 py-1 text-xs font-semibold rounded-lg text-[#938F99] hover:text-white">Fen</button>
+                        <button onclick="updateChartSubject('Sosyal')" class="chart-subj-btn px-2.5 py-1 text-xs font-semibold rounded-lg text-[#938F99] hover:text-white">Sosyal</button>
+                    </div>
+                </div>
+
+                <div class="h-64 sm:h-80 w-full relative">
+                    <canvas id="examProgressChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Exam History List -->
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-bold text-white">Sınav Kayıtları & Karneler</h3>
+                    <span id="examCountBadge" class="text-xs text-[#D0BCFF] bg-[#4A4458] font-bold px-3 py-1 rounded-full">0 Sınav</span>
+                </div>
+
+                <div id="examTrialsList" class="space-y-4">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: GEMINI AI COACH -->
+        <section id="tabContent-aiCoach" class="tab-content hidden space-y-6">
+            <div class="bg-[#25232A] border border-[#49454F] rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#3B383E] pb-5">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#6750A4] to-[#D0BCFF] flex items-center justify-center text-white shadow-lg">
+                            <i data-lucide="bot" class="w-7 h-7 text-[#381E72]"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-xl font-black text-white">Gemini AI Öğrenci Koçu</h2>
+                            <p class="text-xs text-[#938F99]">Kişiselleştirilmiş akademik analiz, konu eksik tespiti ve çalışma stratejisi</p>
+                        </div>
+                    </div>
+                    <button onclick="generateAICoachAnalysis()" id="generateAiBtn" class="bg-gradient-to-r from-[#6750A4] to-[#D0BCFF] hover:opacity-90 text-[#381E72] font-black px-5 py-3 rounded-2xl text-xs transition flex items-center justify-center space-x-2 shadow-lg">
+                        <i data-lucide="sparkles" class="w-4 h-4"></i>
+                        <span>Akıllı Koç Analizi Başlat</span>
+                    </button>
+                </div>
+
+                <!-- Custom Prompt Selector -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button onclick="askAICoachPrompt('general')" class="p-3.5 bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl text-left transition">
+                        <div class="flex items-center space-x-2">
+                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-[#D0BCFF]"></i>
+                            <span class="text-xs font-bold text-white">Genel Başarı Analizi</span>
+                        </div>
+                        <p class="text-[11px] text-[#938F99] mt-1">Deneme netleri ve ders tamamlanma performansı</p>
+                    </button>
+
+                    <button onclick="askAICoachPrompt('weakness')" class="p-3.5 bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl text-left transition">
+                        <div class="flex items-center space-x-2">
+                            <i data-lucide="alert-triangle" class="w-4 h-4 text-[#FFD54F]"></i>
+                            <span class="text-xs font-bold text-white">Eksik Konu & Branş Analizi</span>
+                        </div>
+                        <p class="text-[11px] text-[#938F99] mt-1">Hangi derse ve konuya daha fazla odaklanılmalı?</p>
+                    </button>
+
+                    <button onclick="askAICoachPrompt('motivation')" class="p-3.5 bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl text-left transition">
+                        <div class="flex items-center space-x-2">
+                            <i data-lucide="flame" class="w-4 h-4 text-[#81C784]"></i>
+                            <span class="text-xs font-bold text-white">Motivasyon & Strateji</span>
+                        </div>
+                        <p class="text-[11px] text-[#938F99] mt-1">Sınav stresi yönetimi ve haftalık strateji önerisi</p>
+                    </button>
+                </div>
+
+                <!-- AI Output Display Box -->
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-[#938F99] uppercase tracking-wider">AI Koç Tavsiye Raporu</span>
+                        <span id="aiStatusBadge" class="text-[10px] bg-[#4A4458] text-[#D0BCFF] px-2.5 py-0.5 rounded-full font-bold">Hazır</span>
+                    </div>
+
+                    <div id="aiCoachDetailedOutput" class="bg-[#1C1B1F] border border-[#3B383E] rounded-2xl p-6 text-sm leading-relaxed text-[#E8DEF8] min-h-[180px] whitespace-pre-line">
+                        Yapay zeka koçunuz öğrencinin güncel çalışma verilerini analiz etmek için hazır. Yukarıdaki butonlardan birine tıklayarak veya "Akıllı Koç Analizi Başlat" düğmesini kullanarak rapor oluşturabilirsiniz.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: POMODORO TIMER -->
+        <section id="tabContent-pomodoro" class="tab-content hidden space-y-6">
+            <div class="max-w-xl mx-auto bg-[#25232A] border border-[#49454F] rounded-3xl p-8 shadow-2xl text-center space-y-6">
+                <div>
+                    <h2 class="text-2xl font-black text-white">Odaklanma & Pomodoro</h2>
+                    <p class="text-xs text-[#938F99] mt-1">Dikkatini dağıtmadan hedefine odaklan</p>
+                </div>
+
+                <!-- Timer Circle Display -->
+                <div class="relative w-64 h-64 mx-auto flex items-center justify-center">
+                    <svg class="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="45" stroke="#49454F" stroke-width="6" fill="transparent"/>
+                        <circle id="timerProgressRing" cx="50" cy="50" r="45" stroke="#D0BCFF" stroke-width="6" stroke-linecap="round" fill="transparent" stroke-dasharray="282.7" stroke-dashoffset="0" class="transition-all duration-1000"/>
+                    </svg>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span id="timerDisplay" class="text-5xl font-black text-white tracking-wider">25:00</span>
+                        <span id="timerModeLabel" class="text-xs text-[#D0BCFF] font-bold mt-2 tracking-widest uppercase">Çalışma Modu</span>
+                    </div>
+                </div>
+
+                <!-- Timer Controls -->
+                <div class="flex items-center justify-center space-x-4">
+                    <button onclick="toggleTimer()" id="timerToggleBtn" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-8 py-3.5 rounded-2xl font-extrabold text-base shadow-lg transition flex items-center space-x-2">
+                        <i data-lucide="play" class="w-5 h-5"></i>
+                        <span>Başlat</span>
+                    </button>
+                    <button onclick="resetTimer()" class="bg-[#4A4458] hover:bg-[#6750A4] text-[#E6E1E5] p-3.5 rounded-2xl transition shadow">
+                        <i data-lucide="rotate-ccw" class="w-5 h-5"></i>
+                    </button>
+                </div>
+
+                <!-- Quick Presets -->
+                <div class="flex items-center justify-center space-x-2 pt-2">
+                    <button onclick="setTimerDuration(25)" class="px-3 py-1.5 bg-[#1C1B1F] border border-[#49454F] hover:border-[#D0BCFF] text-xs font-bold rounded-xl">25 Dk (Standart)</button>
+                    <button onclick="setTimerDuration(45)" class="px-3 py-1.5 bg-[#1C1B1F] border border-[#49454F] hover:border-[#D0BCFF] text-xs font-bold rounded-xl">45 Dk (Blok)</button>
+                    <button onclick="setTimerDuration(5)" class="px-3 py-1.5 bg-[#1C1B1F] border border-[#49454F] hover:border-[#D0BCFF] text-xs font-bold rounded-xl">5 Dk (Mola)</button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ==================== MODALS ==================== -->
+
+    <!-- MODAL 1: Add Student Modal -->
+    <div id="addStudentModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[#25232A] border border-[#49454F] rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-fade-in">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-bold text-white">Yeni Öğrenci Ekle</h3>
+                <button onclick="closeModal('addStudentModal')" class="text-[#938F99] hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <form onsubmit="handleAddStudent(event)" class="space-y-3">
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">Öğrenci Adı Soyadı</label>
+                    <input type="text" id="newStudentName" required placeholder="örn: Ahmet Yılmaz" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Sınav Türü</label>
+                        <select id="newStudentExam" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                            <option value="YKS (Sayısal)">YKS (Sayısal)</option>
+                            <option value="YKS (Eşit Ağırlık)">YKS (Eşit Ağırlık)</option>
+                            <option value="YKS (Sözel)">YKS (Sözel)</option>
+                            <option value="LGS">LGS</option>
+                            <option value="KPSS">KPSS</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Hedef Net / Puan</label>
+                        <input type="number" step="0.5" id="newStudentTarget" required value="105.0" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                    </div>
+                </div>
+                <div class="pt-2 flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('addStudentModal')" class="px-4 py-2 text-xs font-bold text-[#938F99] hover:text-white">İptal</button>
+                    <button type="submit" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-5 py-2 rounded-xl text-xs font-extrabold transition">Kaydet</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 2: Add Weekly Course Modal -->
+    <div id="addWeeklyCourseModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[#25232A] border border-[#49454F] rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar animate-fade-in">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-bold text-white">Haftalık Ders & Saat Planla</h3>
+                    <p class="text-xs text-[#938F99]">Gün, ders ve çalışma süresi belirle</p>
+                </div>
+                <button onclick="closeModal('addWeeklyCourseModal')" class="text-[#938F99] hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleAddWeeklyTask(event)" class="space-y-4">
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">📅 Gün Seçimi</label>
+                    <select id="taskDaySelect" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                        <option value="1">Pazartesi</option>
+                        <option value="2">Salı</option>
+                        <option value="3">Çarşamba</option>
+                        <option value="4">Perşembe</option>
+                        <option value="5">Cuma</option>
+                        <option value="6">Cumartesi</option>
+                        <option value="7">Pazar</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Ders Branşı</label>
+                        <select id="taskSubject" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                            <option value="Matematik">📐 Matematik</option>
+                            <option value="Geometri">📏 Geometri</option>
+                            <option value="Fizik">⚡ Fizik</option>
+                            <option value="Kimya">🧪 Kimya</option>
+                            <option value="Biyoloji">🧬 Biyoloji</option>
+                            <option value="Türkçe">📖 Türkçe</option>
+                            <option value="Edebiyat">✍️ Edebiyat</option>
+                            <option value="Tarih">🏛️ Tarih</option>
+                            <option value="Coğrafya">🌍 Coğrafya</option>
+                            <option value="Genel Deneme">📝 Genel Deneme</option>
+                            <option value="Genel Tekrar">🔄 Genel Tekrar</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Öncelik</label>
+                        <select id="taskPriority" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                            <option value="Yüksek">🔥 Yüksek</option>
+                            <option value="Orta" selected>⚡ Orta</option>
+                            <option value="Düşük">🌱 Düşük</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">Ders / Görev Başlığı</label>
+                    <input type="text" id="taskTitle" required placeholder="örn: AYT Matematik - Türev & İntegral" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                </div>
+
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">Hedef Konu / Kaynak Kitap</label>
+                    <input type="text" id="taskTopic" placeholder="örn: 3D Soru Bankası Test 1-4" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Süre (Dakika)</label>
+                        <input type="number" id="taskDuration" value="90" step="15" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Hedef Soru</label>
+                        <input type="number" id="taskQuestions" value="40" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                    </div>
+                </div>
+
+                <div class="pt-2 flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('addWeeklyCourseModal')" class="px-4 py-2 text-xs font-bold text-[#938F99] hover:text-white">İptal</button>
+                    <button type="submit" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-5 py-2 rounded-xl text-xs font-extrabold transition">Programa Ekle</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 3: Add Practice Exam Modal -->
+    <div id="addExamModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[#25232A] border border-[#49454F] rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar animate-fade-in">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-bold text-white">Deneme Sınavı Kaydet</h3>
+                    <p class="text-xs text-[#938F99]">Sınav adı, tarih ve branş netleri</p>
+                </div>
+                <button onclick="closeModal('addExamModal')" class="text-[#938F99] hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleAddExamTrial(event)" class="space-y-4">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Sınav Türü</label>
+                        <select id="examType" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                            <option value="TYT">TYT</option>
+                            <option value="AYT">AYT</option>
+                            <option value="LGS">LGS</option>
+                            <option value="Genel">Genel Simülasyon</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Tarih</label>
+                        <input type="text" id="examDate" value="Bugün" required class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">Deneme Adı & Yayın</label>
+                    <input type="text" id="examTitle" required placeholder="örn: 3D TYT-4 Türkiye Geneli" class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1">
+                </div>
+
+                <!-- 4 Branch Net Inputs -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#1C1B1F] p-3.5 rounded-2xl border border-[#3B383E]">
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Türkçe</label>
+                        <input type="number" step="0.25" id="netTurkish" oninput="calculateLiveTotalNet()" value="32.5" class="w-full bg-[#25232A] border border-[#49454F] rounded-lg px-2 py-1.5 text-sm text-white mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Matematik</label>
+                        <input type="number" step="0.25" id="netMath" oninput="calculateLiveTotalNet()" value="30.0" class="w-full bg-[#25232A] border border-[#49454F] rounded-lg px-2 py-1.5 text-sm text-white mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Fen Bilimleri</label>
+                        <input type="number" step="0.25" id="netScience" oninput="calculateLiveTotalNet()" value="15.0" class="w-full bg-[#25232A] border border-[#49454F] rounded-lg px-2 py-1.5 text-sm text-white mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-[#938F99]">Sosyal Bilgiler</label>
+                        <input type="number" step="0.25" id="netSocial" oninput="calculateLiveTotalNet()" value="16.5" class="w-full bg-[#25232A] border border-[#49454F] rounded-lg px-2 py-1.5 text-sm text-white mt-1">
+                    </div>
+                </div>
+
+                <!-- Live Net Preview Banner -->
+                <div class="bg-[#4A4458]/40 border border-[#D0BCFF]/30 p-3 rounded-2xl flex items-center justify-between">
+                    <span class="text-xs text-[#E8DEF8] font-bold">Toplam Net:</span>
+                    <span id="liveTotalNetDisplay" class="text-lg font-black text-[#D0BCFF]">94.00 Net</span>
+                </div>
+
+                <div>
+                    <label class="text-xs font-bold text-[#938F99]">Hata / Analiz Notu</label>
+                    <textarea id="examNotes" rows="2" placeholder="örn: Geometride çember ve paragrafta hız çalışılacak." class="w-full bg-[#1C1B1F] border border-[#49454F] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D0BCFF] mt-1"></textarea>
+                </div>
+
+                <div class="pt-2 flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('addExamModal')" class="px-4 py-2 text-xs font-bold text-[#938F99] hover:text-white">İptal</button>
+                    <button type="submit" class="bg-[#D0BCFF] hover:bg-[#bfa7f2] text-[#381E72] px-5 py-2 rounded-xl text-xs font-extrabold transition">Sınavı Kaydet</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 4: Templates Modal -->
+    <div id="templateModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[#25232A] border border-[#49454F] rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-fade-in">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-bold text-white">Hazır Haftalık Şablon Yükle</h3>
+                <button onclick="closeModal('templateModal')" class="text-[#938F99] hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <p class="text-xs text-[#938F99]">Hedef sınavına uygun ders dağılımını tek tıkla öğrencinin programına uygula:</p>
+
+            <div class="space-y-3">
+                <div onclick="applyTemplate('sayisal')" class="bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl p-4 cursor-pointer transition">
+                    <div class="flex items-center justify-between">
+                        <h4 class="text-sm font-bold text-white">🚀 YKS Sayısal Yoğun</h4>
+                        <span class="text-xs bg-[#4A4458] text-[#D0BCFF] font-bold px-2 py-0.5 rounded-lg">32 Saat / Hafta</span>
+                    </div>
+                    <p class="text-xs text-[#938F99] mt-1">Matematik (Türev, İntegral), Fizik, Kimya, Biyoloji ve Hafta Sonu Denemesi</p>
+                </div>
+
+                <div onclick="applyTemplate('esitagirlik')" class="bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl p-4 cursor-pointer transition">
+                    <div class="flex items-center justify-between">
+                        <h4 class="text-sm font-bold text-white">⚖️ YKS Eşit Ağırlık Dengeli</h4>
+                        <span class="text-xs bg-[#4A4458] text-[#D0BCFF] font-bold px-2 py-0.5 rounded-lg">28 Saat / Hafta</span>
+                    </div>
+                    <p class="text-xs text-[#938F99] mt-1">Matematik, Divan & Cumhuriyet Edebiyatı, Tarih, Coğrafya ve Karma Deneme</p>
+                </div>
+
+                <div onclick="applyTemplate('lgs')" class="bg-[#1C1B1F] hover:bg-[#2e2a36] border border-[#49454F] hover:border-[#D0BCFF] rounded-2xl p-4 cursor-pointer transition">
+                    <div class="flex items-center justify-between">
+                        <h4 class="text-sm font-bold text-white">🎯 LGS 8. Sınıf Başarı</h4>
+                        <span class="text-xs bg-[#4A4458] text-[#D0BCFF] font-bold px-2 py-0.5 rounded-lg">24 Saat / Hafta</span>
+                    </div>
+                    <p class="text-xs text-[#938F99] mt-1">Matematik, Fen, Türkçe Sözel Mantık, İnkılap Tarihi ve Deneme Sınavı</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- APPLICATION LOGIC -->
+    <script>
+        const apiKey = ""; // Built-in API Key provided at runtime
+
+        // Application State
+        let userRole = localStorage.getItem('userRole') || 'coach'; // 'coach' or 'student'
+        let activeStudentId = "student_1";
+
+        let students = [
+            { id: "student_1", name: "Ali Yılmaz", targetExam: "YKS (Sayısal)", targetScoreOrNet: 108.0, streakDays: 7, notes: "Tıp Fakültesi hedefliyor." },
+            { id: "student_2", name: "Zeynep Kaya", targetExam: "YKS (Eşit Ağırlık)", targetScoreOrNet: 95.0, streakDays: 12, notes: "Hukuk Fakültesi hedefliyor." },
+            { id: "student_3", name: "Can Demir", targetExam: "LGS", targetScoreOrNet: 460.0, streakDays: 4, notes: "Fen Lisesi hedefliyor." }
+        ];
+
+        let tasks = [
+            { id: "task_1", studentId: "student_1", dayOfWeek: 1, title: "AYT Matematik - Türev & İntegral", subject: "Matematik", topicName: "Türev Alma Kuralları", targetQuestions: 50, durationMinutes: 90, priority: "Yüksek", isCompleted: true },
+            { id: "task_2", studentId: "student_1", dayOfWeek: 1, title: "Fizik - Çembersel Hareket", subject: "Fizik", topicName: "Açısal Momentum", targetQuestions: 35, durationMinutes: 75, priority: "Yüksek", isCompleted: false },
+            { id: "task_3", studentId: "student_1", dayOfWeek: 2, title: "Kimya - Kimyasal Denge", subject: "Kimya", topicName: "Sulu Çözelti Dengeleri", targetQuestions: 40, durationMinutes: 75, priority: "Yüksek", isCompleted: true },
+            { id: "task_4", studentId: "student_1", dayOfWeek: 6, title: "TYT Tam Kapsam Genel Deneme", subject: "Genel Deneme", topicName: "3D TG Simülasyonu", targetQuestions: 120, durationMinutes: 165, priority: "Yüksek", isCompleted: false }
+        ];
+
+        let exams = [
+            { id: "exam_1", studentId: "student_1", title: "3D TYT Simülasyon-1", examType: "TYT", date: "15.08.2026", turkishNet: 31.0, mathNet: 28.5, scienceNet: 14.0, socialNet: 15.0, totalNet: 88.5, analysisNotes: "Türkçe paragrafta zaman yetmedi, geometri iyiydi." },
+            { id: "exam_2", studentId: "student_1", title: "Özdebir TYT TG-2", examType: "TYT", date: "22.08.2026", turkishNet: 33.5, mathNet: 31.0, scienceNet: 15.5, socialNet: 16.0, totalNet: 96.0, analysisNotes: "Fizik optik ve dalgalar tekrar edilmeli." },
+            { id: "exam_3", studentId: "student_1", title: "Bilgi Sarmal TYT-3", examType: "TYT", date: "01.09.2026", turkishNet: 34.0, mathNet: 33.5, scienceNet: 16.5, socialNet: 17.0, totalNet: 101.0, analysisNotes: "Hedef net 105'e çok az kaldı, hız denemeleri devam etmeli." }
+        ];
+
+        let activeChartSubject = 'Toplam';
+        let chartInstance = null;
+
+        // Pomodoro State
+        let timerSeconds = 25 * 60;
+        let timerTotalSeconds = 25 * 60;
+        let timerInterval = null;
+        let isTimerRunning = false;
+
+        const dayNames = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            setUserRole(userRole, false);
+            initChart();
+        });
+
+        // Initialize Firebase Listeners when Firebase Auth Ready
+        window.onFirebaseReady = function() {
+            setupFirestoreListeners();
+        };
+
+        // Realtime Firestore Subscriptions
+        function setupFirestoreListeners() {
+            if (!window.currentUser) return;
+            const db = window.db;
+            const appId = window.appId;
+
+            // 1. Students Listener
+            const studentsCol = window.firestoreCollection(db, 'artifacts', appId, 'public', 'data', 'students');
+            window.firestoreOnSnapshot(studentsCol, (snapshot) => {
+                const fetched = [];
+                snapshot.forEach(doc => fetched.push(doc.data()));
+                if (fetched.length > 0) {
+                    students = fetched;
+                    populateStudentDropdown();
+                    renderAll();
+                    updateChart();
+                } else {
+                    // Seed initial data if empty
+                    students.forEach(s => {
+                        window.firestoreSetDoc(window.firestoreDoc(db, 'artifacts', appId, 'public', 'data', 'students', s.id), s);
+                    });
+                }
+            }, (err) => console.log("Student sync err:", err));
+
+            // 2. Tasks Listener
+            const tasksCol = window.firestoreCollection(db, 'artifacts', appId, 'public', 'data', 'tasks');
+            window.firestoreOnSnapshot(tasksCol, (snapshot) => {
+                const fetched = [];
+                snapshot.forEach(doc => fetched.push(doc.data()));
+                if (fetched.length > 0) {
+                    tasks = fetched;
+                    renderAll();
+                } else {
+                    tasks.forEach(t => {
+                        window.firestoreSetDoc(window.firestoreDoc(db, 'artifacts', appId, 'public', 'data', 'tasks', t.id), t);
+                    });
+                }
+            }, (err) => console.log("Tasks sync err:", err));
+
+            // 3. Exams Listener
+            const examsCol = window.firestoreCollection(db, 'artifacts', appId, 'public', 'data', 'exams');
+            window.firestoreOnSnapshot(examsCol, (snapshot) => {
+                const fetched = [];
+                snapshot.forEach(doc => fetched.push(doc.data()));
+                if (fetched.length > 0) {
+                    exams = fetched;
+                    renderAll();
+                    updateChart();
+                } else {
+                    exams.forEach(e => {
+                        window.firestoreSetDoc(window.firestoreDoc(db, 'artifacts', appId, 'public', 'data', 'exams', e.id), e);
+                    });
+                }
+            }, (err) => console.log("Exams sync err:", err));
+        }
+
+        // Save Helper to Cloud
+        async function syncDocToCloud(collectionName, docId, data) {
+            if (!window.currentUser) return;
+            try {
+                await window.firestoreSetDoc(window.firestoreDoc(window.db, 'artifacts', window.appId, 'public', 'data', collectionName, docId), data);
+            } catch (e) {
+                console.error("Firestore sync error:", e);
+            }
+        }
+
+        async function deleteDocFromCloud(collectionName, docId) {
+            if (!window.currentUser) return;
+            try {
+                await window.firestoreDeleteDoc(window.firestoreDoc(window.db, 'artifacts', window.appId, 'public', 'data', collectionName, docId));
+            } catch (e) {
+                console.error("Firestore delete error:", e);
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-[#381E72] text-[#D0BCFF] border-[#D0BCFF]' : 'bg-[#25232A] text-white border-[#49454F]';
+            toast.className = `p-3.5 px-4 rounded-2xl border shadow-xl text-xs font-bold flex items-center space-x-2 transition-all duration-300 transform translate-y-2 pointer-events-auto ${bgClass}`;
+            toast.innerHTML = `<i data-lucide="info" class="w-4 h-4"></i><span>${message}</span>`;
+            container.appendChild(toast);
+            lucide.createIcons();
+            setTimeout(() => { toast.classList.remove('translate-y-2'); }, 10);
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function setUserRole(role, notify = true) {
+            userRole = role;
+            localStorage.setItem('userRole', role);
+
+            const btnCoach = document.getElementById('roleBtnCoach');
+            const btnStudent = document.getElementById('roleBtnStudent');
+            const studentSelectWrapper = document.getElementById('studentSelectWrapper');
+            const addStudentHeaderBtn = document.getElementById('addStudentHeaderBtn');
+            const scheduleActionButtons = document.getElementById('scheduleActionButtons');
+            const coachActionBox = document.getElementById('coachActionBox');
+
+            if (role === 'coach') {
+                btnCoach.className = "px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 bg-[#D0BCFF] text-[#381E72]";
+                btnStudent.className = "px-3 py-1.5 rounded-xl text-xs font-semibold text-[#938F99] hover:text-white transition flex items-center space-x-1.5";
+                studentSelectWrapper.classList.remove('hidden');
+                addStudentHeaderBtn.classList.remove('hidden');
+                if (scheduleActionButtons) scheduleActionButtons.classList.remove('hidden');
+                if (coachActionBox) coachActionBox.classList.remove('hidden');
+                if (notify) showToast("Öğretmen / Koç Paneline Geçildi.", "success");
+            } else {
+                btnStudent.className = "px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 bg-[#D0BCFF] text-[#381E72]";
+                btnCoach.className = "px-3 py-1.5 rounded-xl text-xs font-semibold text-[#938F99] hover:text-white transition flex items-center space-x-1.5";
+                studentSelectWrapper.classList.add('hidden');
+                addStudentHeaderBtn.classList.add('hidden');
+                if (scheduleActionButtons) scheduleActionButtons.classList.add('hidden');
+                if (coachActionBox) coachActionBox.classList.add('hidden');
+                if (notify) showToast("Öğrenci Moduna Geçildi. Sadece ödevlerinizi ve denemelerinizi yönetebilirsiniz.", "info");
+            }
+
+            populateStudentDropdown();
+            renderAll();
+            updateChart();
+        }
+
+        function getActiveStudent() {
+            return students.find(s => s.id === activeStudentId) || students[0];
+        }
+
+        function populateStudentDropdown() {
+            const select = document.getElementById('studentSelect');
+            select.innerHTML = students.map(s => `
+                <option value="${s.id}" ${s.id === activeStudentId ? 'selected' : ''}>${s.name} (${s.targetExam})</option>
+            `).join('');
+        }
+
+        function switchStudent(id) {
+            activeStudentId = id;
+            renderAll();
+            updateChart();
+            showToast(`${getActiveStudent().name} seçildi.`);
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('border-[#D0BCFF]', 'text-[#D0BCFF]');
+                btn.classList.add('border-transparent', 'text-[#938F99]');
+            });
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+
+            const activeBtn = document.getElementById(`tabBtn-${tabId}`);
+            if (activeBtn) {
+                activeBtn.classList.remove('border-transparent', 'text-[#938F99]');
+                activeBtn.classList.add('border-[#D0BCFF]', 'text-[#D0BCFF]');
+            }
+
+            const activeContent = document.getElementById(`tabContent-${tabId}`);
+            if (activeContent) activeContent.classList.remove('hidden');
+
+            if (tabId === 'exams') {
+                setTimeout(updateChart, 50);
+            }
+        }
+
+        function renderAll() {
+            const student = getActiveStudent();
+            if (!student) return;
+
+            const studentTasks = tasks.filter(t => t.studentId === student.id);
+            const studentExams = exams.filter(e => e.studentId === student.id);
+
+            // 1. Render Student Header
+            document.getElementById('studentHeaderCard').innerHTML = `
+                <div class="flex items-center space-x-4">
+                    <div class="w-14 h-14 rounded-2xl bg-[#D0BCFF] text-[#381E72] font-black text-xl flex items-center justify-center shadow-lg">
+                        ${student.name.split(' ').map(n=>n[0]).join('')}
+                    </div>
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <h2 class="text-xl font-black text-white">${student.name}</h2>
+                            <span class="bg-[#4A4458] text-[#D0BCFF] text-xs font-bold px-2.5 py-0.5 rounded-full">${student.targetExam}</span>
+                        </div>
+                        <p class="text-xs text-[#938F99] mt-1">${student.notes || 'Koçluk takibi devam ediyor.'}</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="bg-[#1C1B1F] border border-[#49454F] px-4 py-2 rounded-2xl text-center">
+                        <span class="text-[10px] text-[#938F99] block font-bold uppercase">Hedef Net</span>
+                        <span class="text-base font-black text-[#D0BCFF]">${student.targetScoreOrNet} Net</span>
+                    </div>
+                    <div class="bg-[#1C1B1F] border border-[#49454F] px-4 py-2 rounded-2xl text-center">
+                        <span class="text-[10px] text-[#938F99] block font-bold uppercase">Çalışma Serisi</span>
+                        <span class="text-base font-black text-[#FFD54F]">🔥 ${student.streakDays} Gün</span>
+                    </div>
+                </div>
+            `;
+
+            // 2. Render KPIs
+            const completedCount = studentTasks.filter(t => t.isCompleted).length;
+            const totalTasksCount = studentTasks.length;
+            const compPercent = totalTasksCount > 0 ? Math.round((completedCount / totalTasksCount) * 100) : 0;
+            const totalMins = studentTasks.reduce((acc, t) => acc + (t.durationMinutes || 0), 0);
+            const totalQuestions = studentTasks.reduce((acc, t) => acc + (t.targetQuestions || 0), 0);
+            const latestExam = studentExams[studentExams.length - 1];
+
+            document.getElementById('kpiCompletionRate').innerText = `%${compPercent}`;
+            document.getElementById('kpiCompletionSub').innerText = `${completedCount} / ${totalTasksCount} Tamamlandı`;
+            document.getElementById('kpiTotalHours').innerText = `${(totalMins / 60).toFixed(1)} Saat`;
+            document.getElementById('kpiTotalMinutes').innerText = `${totalMins} Dk Planlandı`;
+            document.getElementById('kpiTotalQuestions').innerText = `${totalQuestions} Soru`;
+            document.getElementById('kpiLatestNet').innerText = latestExam ? `${latestExam.totalNet.toFixed(1)} Net` : '-';
+            document.getElementById('kpiTargetDistance').innerText = `Hedef: ${student.targetScoreOrNet} Net`;
+
+            // 3. Render Today's Tasks
+            const todayNum = new Date().getDay() === 0 ? 7 : new Date().getDay();
+            document.getElementById('todayBadge').innerText = dayNames[todayNum - 1];
+            const todayTasks = studentTasks.filter(t => t.dayOfWeek === todayNum);
+
+            const todayContainer = document.getElementById('todayTaskList');
+            if (todayTasks.length === 0) {
+                todayContainer.innerHTML = `
+                    <div class="p-6 bg-[#1C1B1F] rounded-2xl border border-[#3B383E] text-center text-xs text-[#938F99]">
+                        Bugün için henüz ders görevi planlanmadı.
+                    </div>
+                `;
+            } else {
+                todayContainer.innerHTML = todayTasks.map(t => `
+                    <div class="flex items-center justify-between p-3.5 bg-[#1C1B1F] border border-[#3B383E] rounded-2xl hover:border-[#49454F] transition">
+                        <div class="flex items-center space-x-3">
+                            <input type="checkbox" onchange="toggleTask('${t.id}')" ${t.isCompleted ? 'checked' : ''} class="w-5 h-5 rounded-lg accent-[#D0BCFF] cursor-pointer">
+                            <div>
+                                <h4 class="text-sm font-bold ${t.isCompleted ? 'line-through text-[#938F99]' : 'text-white'}">${t.title}</h4>
+                                <p class="text-xs text-[#938F99]">${t.subject} • ${t.topicName || 'Genel Konu'}</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs font-bold bg-[#4A4458] text-[#D0BCFF] px-2.5 py-1 rounded-lg">${t.durationMinutes} dk</span>
+                            <span class="text-xs font-bold bg-[#25232A] text-[#E6E1E5] px-2 py-1 rounded-lg">${t.targetQuestions}S</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            // 4. Render Weekly Matrix
+            const weeklyMatrix = document.getElementById('weeklyMatrixContainer');
+            weeklyMatrix.innerHTML = [1,2,3,4,5,6,7].map(dayNum => {
+                const dayTasks = studentTasks.filter(t => t.dayOfWeek === dayNum);
+                const dayMins = dayTasks.reduce((acc, t) => acc + (t.durationMinutes || 0), 0);
+                const isToday = dayNum === todayNum;
+
+                return `
+                    <div class="bg-[#25232A] border ${isToday ? 'border-[#D0BCFF]' : 'border-[#49454F]'} rounded-3xl p-4 flex flex-col justify-between shadow space-y-3">
+                        <div class="flex items-center justify-between border-b border-[#3B383E] pb-2.5">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-sm font-black ${isToday ? 'text-[#D0BCFF]' : 'text-white'}">${dayNames[dayNum-1]}</span>
+                                ${isToday ? '<span class="bg-[#D0BCFF] text-[#381E72] text-[10px] font-black px-1.5 py-0.5 rounded-md">Bugün</span>' : ''}
+                            </div>
+                            <span class="text-xs text-[#938F99] font-bold">${(dayMins/60).toFixed(1)}s</span>
+                        </div>
+
+                        <div class="space-y-2 flex-1 min-h-[120px]">
+                            ${dayTasks.length === 0 ? '<p class="text-[11px] text-[#938F99] italic text-center py-4">Boş Gün</p>' : dayTasks.map(t => `
+                                <div class="p-2.5 bg-[#1C1B1F] rounded-xl border border-[#3B383E] flex items-center justify-between text-xs">
+                                    <div class="truncate mr-2">
+                                        <p class="font-bold text-white truncate ${t.isCompleted ? 'line-through text-[#938F99]' : ''}">${t.title}</p>
+                                        <p class="text-[10px] text-[#938F99]">${t.subject}</p>
+                                    </div>
+                                    ${userRole === 'coach' ? `<button onclick="deleteTask('${t.id}')" class="text-[#938F99] hover:text-red-400 p-1"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // 5. Render Exam Trials List
+            document.getElementById('examCountBadge').innerText = `${studentExams.length} Sınav`;
+            const examList = document.getElementById('examTrialsList');
+            if (studentExams.length === 0) {
+                examList.innerHTML = `<div class="bg-[#25232A] border border-[#49454F] rounded-3xl p-8 text-center text-xs text-[#938F99]">Henüz deneme sınavı eklenmedi.</div>`;
+            } else {
+                examList.innerHTML = [...studentExams].reverse().map(e => `
+                    <div class="bg-[#25232A] border border-[#49454F] rounded-3xl p-5 shadow-lg space-y-3">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="bg-[#4A4458] text-[#D0BCFF] text-xs font-bold px-2 py-0.5 rounded-md">${e.examType}</span>
+                                    <span class="text-xs text-[#938F99]">${e.date}</span>
+                                </div>
+                                <h4 class="text-base font-bold text-white mt-1">${e.title}</h4>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <div class="bg-[#D0BCFF] text-[#381E72] font-black text-base px-3 py-1.5 rounded-xl shadow">
+                                    ${e.totalNet.toFixed(2)} Net
+                                </div>
+                                <button onclick="deleteExam('${e.id}')" class="text-[#938F99] hover:text-red-400 p-1.5"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                            </div>
+                        </div>
+
+                        <!-- 4 Branch Pill Grid -->
+                        <div class="grid grid-cols-4 gap-2 text-center text-xs">
+                            <div class="bg-[#1C1B1F] p-2 rounded-xl border border-[#3B383E]">
+                                <span class="text-[10px] text-[#938F99] block">Türkçe</span>
+                                <span class="font-bold text-[#D0BCFF]">${e.turkishNet.toFixed(1)} N</span>
+                            </div>
+                            <div class="bg-[#1C1B1F] p-2 rounded-xl border border-[#3B383E]">
+                                <span class="text-[10px] text-[#938F99] block">Matematik</span>
+                                <span class="font-bold text-[#D0BCFF]">${e.mathNet.toFixed(1)} N</span>
+                            </div>
+                            <div class="bg-[#1C1B1F] p-2 rounded-xl border border-[#3B383E]">
+                                <span class="text-[10px] text-[#938F99] block">Fen Bil.</span>
+                                <span class="font-bold text-[#D0BCFF]">${e.scienceNet.toFixed(1)} N</span>
+                            </div>
+                            <div class="bg-[#1C1B1F] p-2 rounded-xl border border-[#3B383E]">
+                                <span class="text-[10px] text-[#938F99] block">Sosyal</span>
+                                <span class="font-bold text-[#D0BCFF]">${e.socialNet.toFixed(1)} N</span>
+                            </div>
+                        </div>
+
+                        ${e.analysisNotes ? `
+                            <div class="bg-[#1C1B1F] p-3 rounded-xl border border-[#3B383E] text-xs text-[#E6E1E5]">
+                                <span class="text-[10px] font-bold text-[#938F99] block">Analiz / Öğrenci Notu:</span>
+                                ${e.analysisNotes}
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('');
+            }
+
+            // 6. Update Quick Coach Insight Box
+            if (studentExams.length >= 1) {
+                const latest = studentExams[studentExams.length - 1];
+                document.getElementById('coachInsightBox').innerHTML = `
+                    📌 <b>Son Deneme:</b> ${latest.title} (${latest.totalNet.toFixed(1)} Net)<br>
+                    🎯 <b>Hedef:</b> ${student.targetScoreOrNet} Net (Fark: ${(student.targetScoreOrNet - latest.totalNet).toFixed(1)} Net)<br>
+                    💡 AI Koç analizi almak için "Gemini AI Koç" sekmesine geçebilirsiniz.
+                `;
+            }
+
+            lucide.createIcons();
+        }
+
+        // ==================== GEMINI AI INTEGRATION ====================
+        async function callGemini(userQuery, systemPrompt = "") {
+            const payload = { contents: [{ parts: [{ text: userQuery }] }] };
+            if (systemPrompt) payload.systemInstruction = { parts: [{ text: systemPrompt }] };
+
+            let delay = 1000;
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        return data.candidates?.[0]?.content?.parts?.[0]?.text || "Yanıt alınamadı.";
+                    }
+                } catch (e) {}
+                await new Promise(r => setTimeout(r, delay));
+                delay *= 2;
+            }
+            throw new Error("Yapay zeka servisine bağlanılamadı.");
+        }
+
+        async function generateAICoachAnalysis() {
+            await askAICoachPrompt('general');
+        }
+
+        async function askAICoachPrompt(promptType) {
+            const student = getActiveStudent();
+            const studentTasks = tasks.filter(t => t.studentId === student.id);
+            const studentExams = exams.filter(e => e.studentId === student.id);
+
+            const outputElem = document.getElementById('aiCoachDetailedOutput');
+            const badgeElem = document.getElementById('aiStatusBadge');
+
+            outputElem.innerText = "⏳ Gemini AI öğrencinin verilerini analiz ediyor, lütfen bekleyin...";
+            badgeElem.innerText = "Analiz Ediliyor";
+            badgeElem.className = "text-[10px] bg-[#FFD54F] text-[#381E72] px-2.5 py-0.5 rounded-full font-bold animate-pulse";
+
+            const examsSummary = studentExams.map(e => `${e.title} (${e.date}): Toplam Net: ${e.totalNet} (TR: ${e.turkishNet}, Mat: ${e.mathNet}, Fen: ${e.scienceNet}, Sos: ${e.socialNet}). Not: ${e.analysisNotes || 'Yok'}`).join('\n');
+            const tasksSummary = `Toplam ${studentTasks.length} görev var, ${studentTasks.filter(t => t.isCompleted).length} tanesi tamamlandı. Toplam haftalık çalışma: ${studentTasks.reduce((a,b)=>a+(b.durationMinutes||0),0)} dk.`;
+
+            let focusPrompt = "Öğrencinin genel durumunu değerlendir, hedefine olan mesafesini yorumla ve 3 maddelik eylem planı sun.";
+            if (promptType === 'weakness') {
+                focusPrompt = "Öğrencinin branş netlerini karşılaştırarak en zayıf olduğu branş veya konuları tespit et ve somut net artırma tavsiyeleri ver.";
+            } else if (promptType === 'motivation') {
+                focusPrompt = "Öğrenciye sınav maratonunda motivasyon verici, yapıcı ve stratejik koçluk tavsiyeleri sun.";
+            }
+
+            const systemPrompt = "Sen YKS, LGS ve KPSS sınavlarında uzman profesyonel bir Eğitim Koçusun. Öğrenci verilerini analiz eder, motive edici, samimi ve uygulaması kolay rehberlik verirsin. Yanıtlarını düzenli maddeler ve emoji ikonları ile Türkçe olarak sun.";
+
+            const userQuery = `
+Öğrenci Adı: ${student.name}
+Hedef Sınav: ${student.targetExam}
+Hedef Net: ${student.targetScoreOrNet}
+Çalışma Serisi: ${student.streakDays} gün
+Haftalık Görev Durumu: ${tasksSummary}
+
+Son Deneme Sınavları:
+${examsSummary || 'Henüz deneme kaydı yok.'}
+
+Koçluk Odağı: ${focusPrompt}
+            `;
+
+            try {
+                const aiResponse = await callGemini(userQuery, systemPrompt);
+                outputElem.innerText = aiResponse;
+                badgeElem.innerText = "Tamamlandı";
+                badgeElem.className = "text-[10px] bg-[#81C784] text-[#141218] px-2.5 py-0.5 rounded-full font-bold";
+                showToast("AI Koç analizi başarıyla güncellendi!", "success");
+            } catch (err) {
+                outputElem.innerText = "⚠️ Yapay zeka analizi oluşturulurken bir sorun oluştu. Lütfen bağlantınızı kontrol edip tekrar deneyin.";
+                badgeElem.innerText = "Hata";
+                badgeElem.className = "text-[10px] bg-red-400 text-white px-2.5 py-0.5 rounded-full font-bold";
+            }
+        }
+
+        // ==================== CHART LOGIC ====================
+        function initChart() {
+            const ctx = document.getElementById('examProgressChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Net Skoru',
+                            data: [],
+                            borderColor: '#D0BCFF',
+                            backgroundColor: 'rgba(208, 188, 255, 0.15)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.35,
+                            pointRadius: 5,
+                            pointBackgroundColor: '#D0BCFF'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            grid: { color: 'rgba(73, 69, 79, 0.4)' },
+                            ticks: { color: '#938F99' }
+                        },
+                        x: {
+                            grid: { color: 'rgba(73, 69, 79, 0.2)' },
+                            ticks: { color: '#938F99' }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+            updateChart();
+        }
+
+        function updateChartSubject(subject) {
+            activeChartSubject = subject;
+            document.querySelectorAll('.chart-subj-btn').forEach(btn => {
+                btn.classList.remove('bg-[#D0BCFF]', 'text-[#381E72]', 'active');
+                btn.classList.add('text-[#938F99]');
+                if (btn.innerText.trim() === subject) {
+                    btn.classList.add('bg-[#D0BCFF]', 'text-[#381E72]', 'active');
+                    btn.classList.remove('text-[#938F99]');
+                }
+            });
+            updateChart();
+        }
+
+        function updateChart() {
+            if (!chartInstance) return;
+            const student = getActiveStudent();
+            const studentExams = exams.filter(e => e.studentId === student.id);
+
+            const labels = studentExams.map(e => e.title.substring(0, 12));
+            const dataPoints = studentExams.map(e => {
+                switch(activeChartSubject) {
+                    case 'Matematik': return e.mathNet;
+                    case 'Türkçe': return e.turkishNet;
+                    case 'Fen': return e.scienceNet;
+                    case 'Sosyal': return e.socialNet;
+                    default: return e.totalNet;
+                }
+            });
+
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = dataPoints;
+            chartInstance.data.datasets[0].label = `${activeChartSubject} Net`;
+            chartInstance.update();
+        }
+
+        // ==================== ACTIONS & EVENT HANDLERS ====================
+        function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        async function handleAddStudent(e) {
+            e.preventDefault();
+            const name = document.getElementById('newStudentName').value;
+            const exam = document.getElementById('newStudentExam').value;
+            const target = parseFloat(document.getElementById('newStudentTarget').value) || 100;
+
+            const newId = "student_" + Date.now();
+            const newStudent = {
+                id: newId,
+                name: name,
+                targetExam: exam,
+                targetScoreOrNet: target,
+                streakDays: 1,
+                notes: "Yeni öğrenci kaydı."
+            };
+
+            students.push(newStudent);
+            activeStudentId = newId;
+            await syncDocToCloud('students', newId, newStudent);
+
+            populateStudentDropdown();
+            renderAll();
+            updateChart();
+            closeModal('addStudentModal');
+            showToast(`Yeni öğrenci (${name}) başarıyla eklendi!`, 'success');
+            e.target.reset();
+        }
+
+        async function handleAddWeeklyTask(e) {
+            e.preventDefault();
+            const dayOfWeek = parseInt(document.getElementById('taskDaySelect').value);
+            const subject = document.getElementById('taskSubject').value;
+            const priority = document.getElementById('taskPriority').value;
+            const title = document.getElementById('taskTitle').value;
+            const topic = document.getElementById('taskTopic').value;
+            const duration = parseInt(document.getElementById('taskDuration').value) || 60;
+            const questions = parseInt(document.getElementById('taskQuestions').value) || 30;
+
+            const newId = "task_" + Date.now();
+            const newTask = {
+                id: newId,
+                studentId: activeStudentId,
+                dayOfWeek,
+                subject,
+                priority,
+                title,
+                topicName: topic,
+                durationMinutes: duration,
+                targetQuestions: questions,
+                isCompleted: false
+            };
+
+            tasks.push(newTask);
+            await syncDocToCloud('tasks', newId, newTask);
+
+            renderAll();
+            closeModal('addWeeklyCourseModal');
+            showToast("Ders görevi programa eklendi.", 'success');
+            e.target.reset();
+        }
+
+        function calculateLiveTotalNet() {
+            const turk = parseFloat(document.getElementById('netTurkish').value) || 0;
+            const math = parseFloat(document.getElementById('netMath').value) || 0;
+            const sci = parseFloat(document.getElementById('netScience').value) || 0;
+            const soc = parseFloat(document.getElementById('netSocial').value) || 0;
+            const total = turk + math + sci + soc;
+            document.getElementById('liveTotalNetDisplay').innerText = `${total.toFixed(2)} Net`;
+        }
+
+        async function handleAddExamTrial(e) {
+            e.preventDefault();
+            const type = document.getElementById('examType').value;
+            const date = document.getElementById('examDate').value;
+            const title = document.getElementById('examTitle').value;
+            const turk = parseFloat(document.getElementById('netTurkish').value) || 0;
+            const math = parseFloat(document.getElementById('netMath').value) || 0;
+            const sci = parseFloat(document.getElementById('netScience').value) || 0;
+            const soc = parseFloat(document.getElementById('netSocial').value) || 0;
+            const notes = document.getElementById('examNotes').value;
+            const total = turk + math + sci + soc;
+
+            const newId = "exam_" + Date.now();
+            const newExam = {
+                id: newId,
+                studentId: activeStudentId,
+                examType: type,
+                date: date,
+                title: title,
+                turkishNet: turk,
+                mathNet: math,
+                scienceNet: sci,
+                socialNet: soc,
+                totalNet: total,
+                analysisNotes: notes
+            };
+
+            exams.push(newExam);
+            await syncDocToCloud('exams', newId, newExam);
+
+            renderAll();
+            updateChart();
+            closeModal('addExamModal');
+            showToast("Deneme sınavı kaydı eklendi!", 'success');
+            e.target.reset();
+        }
+
+        async function toggleTask(id) {
+            const t = tasks.find(item => item.id === id);
+            if (t) {
+                t.isCompleted = !t.isCompleted;
+                await syncDocToCloud('tasks', t.id, t);
+                renderAll();
+                showToast(t.isCompleted ? "Görev tamamlandı! 🎉" : "Görev durumu güncellendi.");
+            }
+        }
+
+        async function deleteTask(id) {
+            tasks = tasks.filter(item => item.id !== id);
+            await deleteDocFromCloud('tasks', id);
+            renderAll();
+            showToast("Görev silindi.");
+        }
+
+        async function deleteExam(id) {
+            exams = exams.filter(item => item.id !== id);
+            await deleteDocFromCloud('exams', id);
+            renderAll();
+            updateChart();
+            showToast("Sınav kaydı silindi.");
+        }
+
+        async function applyTemplate(type) {
+            // Clear existing student tasks
+            const studentTasks = tasks.filter(t => t.studentId === activeStudentId);
+            for (const t of studentTasks) {
+                await deleteDocFromCloud('tasks', t.id);
+            }
+            tasks = tasks.filter(t => t.studentId !== activeStudentId);
+
+            const templateTasks = [];
+            if (type === 'sayisal') {
+                templateTasks.push(
+                    { title: "AYT Matematik - Türev & İntegral", subject: "Matematik", topicName: "Türev Alma", targetQuestions: 50, durationMinutes: 90, dayOfWeek: 1 },
+                    { title: "AYT Fizik - Çembersel Hareket", subject: "Fizik", topicName: "Dönme Dinamiği", targetQuestions: 40, durationMinutes: 75, dayOfWeek: 2 },
+                    { title: "AYT Kimya - Elektrokimya", subject: "Kimya", topicName: "Piller & Elektroliz", targetQuestions: 45, durationMinutes: 75, dayOfWeek: 3 },
+                    { title: "TYT Genel Deneme Simülasyonu", subject: "Genel Deneme", topicName: "Türkiye Geneli", targetQuestions: 120, durationMinutes: 165, dayOfWeek: 6 }
+                );
+            } else if (type === 'esitagirlik') {
+                templateTasks.push(
+                    { title: "AYT Matematik - Logaritma & Dizi", subject: "Matematik", topicName: "Aritmetik Dizi", targetQuestions: 50, durationMinutes: 90, dayOfWeek: 1 },
+                    { title: "Edebiyat - Cumhuriyet Dönemi Roman", subject: "Edebiyat", topicName: "Milli Edebiyat Zevki", targetQuestions: 40, durationMinutes: 75, dayOfWeek: 2 },
+                    { title: "Karma AYT Deneme Sınavı", subject: "Genel Deneme", topicName: "Eşit Ağırlık Deneme", targetQuestions: 80, durationMinutes: 135, dayOfWeek: 6 }
+                );
+            } else if (type === 'lgs') {
+                templateTasks.push(
+                    { title: "8. Sınıf LGS Matematik - Çarpanlar & Katlar", subject: "Matematik", topicName: "EBOB-EKOK", targetQuestions: 40, durationMinutes: 60, dayOfWeek: 1 },
+                    { title: "8. Sınıf Fen Bilimleri - Mevsimler & İklim", subject: "Fen", topicName: "DNA & Genetik Kod", targetQuestions: 35, durationMinutes: 60, dayOfWeek: 2 },
+                    { title: "LGS Tam Kapsam Sözel + Sayısal Deneme", subject: "Genel Deneme", topicName: "LGS Simülasyonu", targetQuestions: 90, durationMinutes: 155, dayOfWeek: 6 }
+                );
+            }
+
+            for (const item of templateTasks) {
+                const newId = "task_" + Math.random().toString(36).substr(2, 9);
+                const newTask = {
+                    id: newId,
+                    studentId: activeStudentId,
+                    dayOfWeek: item.dayOfWeek,
+                    subject: item.subject,
+                    priority: "Yüksek",
+                    title: item.title,
+                    topicName: item.topicName,
+                    durationMinutes: item.durationMinutes,
+                    targetQuestions: item.targetQuestions,
+                    isCompleted: false
+                };
+                tasks.push(newTask);
+                await syncDocToCloud('tasks', newId, newTask);
+            }
+
+            renderAll();
+            closeModal('templateModal');
+            showToast("Hazır şablon program yüklendi!", "success");
+        }
+
+        // ==================== POMODORO TIMER LOGIC ====================
+        function updateTimerDisplay() {
+            const m = Math.floor(timerSeconds / 60);
+            const s = timerSeconds % 60;
+            document.getElementById('timerDisplay').innerText = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+
+            const circumference = 2 * Math.PI * 45; // 282.7
+            const fraction = timerSeconds / timerTotalSeconds;
+            const offset = circumference * (1 - fraction);
+            document.getElementById('timerProgressRing').style.strokeDashoffset = offset;
+        }
+
+        function toggleTimer() {
+            if (isTimerRunning) {
+                clearInterval(timerInterval);
+                isTimerRunning = false;
+                document.getElementById('timerToggleBtn').innerHTML = `<i data-lucide="play" class="w-5 h-5"></i><span>Devam Et</span>`;
+            } else {
+                isTimerRunning = true;
+                document.getElementById('timerToggleBtn').innerHTML = `<i data-lucide="pause" class="w-5 h-5"></i><span>Duraklat</span>`;
+                timerInterval = setInterval(() => {
+                    if (timerSeconds > 0) {
+                        timerSeconds--;
+                        updateTimerDisplay();
+                    } else {
+                        clearInterval(timerInterval);
+                        isTimerRunning = false;
+                        showToast("🎉 Tebrikler! Odaklanma seansını başarıyla tamamladın.", "success");
+                        resetTimer();
+                    }
+                }, 1000);
+            }
+            lucide.createIcons();
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            isTimerRunning = false;
+            timerSeconds = timerTotalSeconds;
+            document.getElementById('timerToggleBtn').innerHTML = `<i data-lucide="play" class="w-5 h-5"></i><span>Başlat</span>`;
+            updateTimerDisplay();
+            lucide.createIcons();
+        }
+
+        function setTimerDuration(mins) {
+            clearInterval(timerInterval);
+            isTimerRunning = false;
+            timerTotalSeconds = mins * 60;
+            timerSeconds = timerTotalSeconds;
+            document.getElementById('timerModeLabel').innerText = mins === 5 ? "Mola Zamanı" : "Çalışma Modu";
+            document.getElementById('timerToggleBtn').innerHTML = `<i data-lucide="play" class="w-5 h-5"></i><span>Başlat</span>`;
+            updateTimerDisplay();
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
